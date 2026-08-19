@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vector Search</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+  <div class="max-w-3xl mx-auto py-12 px-4">
+    <h1 class="text-3xl font-bold text-center mb-8 text-gray-800">Vector Search</h1>
+
+    <!-- ─── SEARCH SECTION ─── -->
+    <div class="bg-white rounded-lg shadow p-6 mb-8">
+      <label class="block text-sm font-medium text-gray-700 mb-2">Search</label>
+      <div class="flex gap-3">
+        <input
+          id="searchInput"
+          type="text"
+          placeholder="Enter search query…"
+          class="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button
+          id="searchBtn"
+          class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2 rounded-lg transition"
+        >
+          Search
+        </button>
+      </div>
+
+      <!-- max distance -->
+      <div class="flex items-center gap-3 mt-3">
+        <label for="maxDistance" class="text-sm text-gray-700 whitespace-nowrap">Max distance</label>
+        <input
+          id="maxDistanceSlider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.4"
+          class="w-[100px] accent-blue-600"
+        />
+        <input
+          id="maxDistanceInput"
+          type="number"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.4"
+          class="w-16 rounded-lg border border-gray-300 px-2 py-1 text-center text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      <!-- error -->
+      <p id="searchError" class="mt-2 text-sm text-red-600 hidden"></p>
+
+      <!-- results -->
+      <div id="results" class="mt-4 space-y-4"></div>
+
+      <!-- combine & answer button -->
+      <div id="combineAnswerBar" class="hidden mt-4 flex items-center gap-3">
+        <button
+          id="combineAnswerBtn"
+          class="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-5 py-2 rounded-lg transition"
+        >
+          Combine &amp; Answer
+        </button>
+        <span id="selectedCount" class="text-sm text-gray-600"></span>
+      </div>
+
+      <!-- answer output -->
+      <div id="answerOutput" class="hidden mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
+        <h3 class="font-semibold text-green-800 mb-2">Answer</h3>
+        <div id="answerContent" class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap"></div>
+      </div>
+
+      <!-- hidden field to persist last search query for back-button support -->
+      <input type="hidden" id="lastSearchQuery" value="" />
+    </div>
+
+    <!-- ─── INSERT SECTION (collapsible) ─── -->
+    <div class="bg-white rounded-lg shadow mb-8">
+      <button
+        id="insertToggleBtn"
+        class="w-full flex items-center justify-between px-6 py-4 text-gray-800 hover:bg-gray-50 transition rounded-lg"
+      >
+        <h2 class="text-xl font-semibold">Insert Document</h2>
+        <span id="insertToggleIcon" class="text-2xl font-light text-gray-500 w-8 h-8 flex items-center justify-center">+</span>
+      </button>
+      <div id="insertForm" class="hidden px-6 pb-6">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+        <input
+          id="insertTitle"
+          type="text"
+          placeholder="Document title"
+          class="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
+        />
+        <label class="block text-sm font-medium text-gray-700 mb-1">Content</label>
+        <textarea
+          id="insertContent"
+          rows="6"
+          placeholder="Document content…"
+          class="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
+        ></textarea>
+        <button
+          id="insertBtn"
+          class="bg-green-600 hover:bg-green-700 text-white font-medium px-5 py-2 rounded-lg transition"
+        >
+          Insert
+        </button>
+        <p id="insertError" class="mt-2 text-sm text-red-600 hidden"></p>
+        <p id="insertSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
+      </div>
+    </div>
+
+    <!-- ─── DRAG & DROP FILE UPLOAD SECTION ─── -->
+    <div class="bg-white rounded-lg shadow p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4">Upload Files</h2>
+      <p class="text-sm text-gray-600 mb-4">Drag &amp; drop one or more files here, or click to select. Supported: .pdf, .docx, .doc, .xlsx, .xlsm, .html, .htm, .txt, .md, .json, .csv, .xml, .pptx</p>
+      <div
+        id="dropZone"
+        class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition"
+      >
+        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <p class="mt-4 text-sm text-gray-600">
+          <span class="font-medium text-blue-600">Click to select</span> or drag and drop
+        </p>
+        <p class="text-xs text-gray-500 mt-1">Files will be copied to the docs folder and embedded automatically</p>
+      </div>
+      <input type="file" id="fileInput" multiple class="hidden"
+        accept=".pdf,.docx,.doc,.xlsx,.xlsm,.html,.htm,.txt,.md,.json,.csv,.xml,.pptx"
+      />
+      <div id="uploadedFilesList" class="mt-3 space-y-2"></div>
+      <p id="uploadError" class="mt-2 text-sm text-red-600 hidden"></p>
+      <p id="uploadSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
+    </div>
+
+    <!-- ─── IMPORT FOLDER SECTION ─── -->
+    <div class="bg-white rounded-lg shadow p-6">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4">Import Folder</h2>
+      <p class="text-sm text-gray-600 mb-4">Import all supported files from the <code class="bg-gray-100 px-1 rounded">./docs</code> folder (supports .pdf, .docx, .doc, .xlsx, .xlsm, .html, .htm, .txt, .md, .json, .csv, .xml, .pptx)</p>
+      <button
+        id="importBtn"
+        class="bg-purple-600 hover:bg-purple-700 text-white font-medium px-5 py-2 rounded-lg transition"
+      >
+        Import
+      </button>
+      <p id="importError" class="mt-2 text-sm text-red-600 hidden"></p>
+      <p id="importSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
+    </div>
+  </div>
+
+  <!-- ─── WORD COUNT HELPER (used in truncate) ─── -->
+  <script>
+    const API = "http://localhost:3000";
+
+    /* ---- helpers ---- */
+
+    /**
+     * Extract the base document title from a chunked title.
+     * Chunk titles look like: "DocName | SectionTitle | p5 | chunk3"
+     * We want just "DocName" to group related chunks.
+     */
+    function getBaseTitle(fullTitle) {
+      // Title format: "baseName | sectionOrPage | chunkN"
+      const parts = fullTitle.split(" | ");
+      return parts[0];
+    }
+
+    /** Restore a previous search from the hidden field (back-button support). */
+    function restoreLastSearch() {
+      const lastQuery = document.getElementById("lastSearchQuery").value.trim();
+      if (lastQuery) {
+        document.getElementById("searchInput").value = lastQuery;
+        doSearch();
+      }
+    }
+
+    function getMaxDistance() {
+      const v = parseFloat(document.getElementById("maxDistanceInput").value);
+      return isNaN(v) ? 0.4 : Math.min(1, Math.max(0, v));
+    }
+
+    /* ---- helpers ---- */
+    function show(id, text) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.classList.remove("hidden");
+    }
+    function hide(id) {
+      const el = document.getElementById(id);
+      el.classList.add("hidden");
+    }
+
+    /** Truncate a string to ~maxChars characters, appending "…" if cut off. */
+    function truncateChars(text, maxChars) {
+      if (text.length <= maxChars) return text;
+      return text.substring(0, maxChars) + " …";
+    }
+
+    const MAX_PREVIEW_CHARS = 800;
+
+    /* ---- store all results for combine & answer ---- */
+    let allResultsData = []; // flat array of { id, title, content, metadata as object }
+
+    /* ---- SEARCH ---- */
+    async function doSearch() {
+      const query = document.getElementById("searchInput").value.trim();
+      if (!query) return;
+
+      hide("searchError");
+      const resultsEl = document.getElementById("results");
+      resultsEl.innerHTML = `<p class="text-gray-500">Searching…</p>`;
+
+      const maxDist = getMaxDistance();
+      try {
+        const res = await fetch(
+          `${API}/search?q=${encodeURIComponent(query)}&maxDistance=${maxDist}`
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          show("searchError", err.error || "Search failed");
+          resultsEl.innerHTML = "";
+          return;
+        }
+        const data = await res.json();
+
+        if (!data.length) {
+          resultsEl.innerHTML = `<p class="text-gray-500">No results found.</p>`;
+          return;
+        }
+
+        resultsEl.innerHTML = "";
+
+        // Store flat data for combine & answer
+        allResultsData = data;
+
+        // Store last search query for back-button persistence
+        document.getElementById("lastSearchQuery").value = query;
+
+        for (const doc of data) {
+          const baseTitle = getBaseTitle(doc.title);
+          const card = document.createElement("div");
+          card.className = "border border-gray-200 rounded-lg p-4";
+          card.dataset.docTitle = baseTitle;
+
+          const content = doc.content || "";
+          const isTruncated = content.length > MAX_PREVIEW_CHARS;
+          const previewText = escapeHtml(truncateChars(content, MAX_PREVIEW_CHARS));
+          const scoreLabel = doc.score != null ? ` · score ${Number(doc.score).toFixed(3)}` : "";
+
+          card.innerHTML = `
+            <div class="relative">
+              <input type="checkbox" checked data-id="${doc.id}" class="absolute top-0 right-0 w-5 h-5 accent-blue-600 result-checkbox" />
+              <p class="text-sm text-gray-600 mb-1">ID: ${doc.id}${scoreLabel}</p>
+              <p class="text-xs text-gray-500 mb-2 pr-8">${escapeHtml(doc.title || "")}</p>
+              <p class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap preview-text">${previewText}</p>
+              <div class="full-content-area hidden mt-2"></div>
+              <div class="flex items-center gap-3 mt-2">
+                <button type="button" class="reveal-btn text-sm text-blue-600 font-medium underline">
+                  ${isTruncated ? "Show full document" : "Show surrounding chunks"}
+                </button>
+                <button type="button" class="open-file-btn hidden text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium px-2 py-1 rounded border border-blue-200 transition">
+                  Open file
+                </button>
+              </div>
+            </div>
+          `;
+
+          const previewEl = card.querySelector(".preview-text");
+          const contentArea = card.querySelector(".full-content-area");
+          const revealBtn = card.querySelector(".reveal-btn");
+          const openFileBtn = card.querySelector(".open-file-btn");
+          let loaded = false;
+
+          let docsFilesCache = null;
+
+          async function findMatchingFile(baseTitle) {
+            if (!docsFilesCache) {
+              const res = await fetch(`${API}/docs-files`);
+              docsFilesCache = res.ok ? await res.json() : [];
+            }
+            const normalized = baseTitle.toLowerCase().replace(/\s+/g, " ");
+            for (const file of docsFilesCache) {
+              const nameNoExt = file.replace(/\.[^.]+$/, "").toLowerCase().replace(/\s+/g, " ");
+              if (nameNoExt === normalized || nameNoExt.includes(normalized) || normalized.includes(nameNoExt)) {
+                return file;
+              }
+            }
+            // Fuzzy: try matching key words
+            const keywords = normalized.split(" ").filter(w => w.length > 3);
+            for (const file of docsFilesCache) {
+              const nameNoExt = file.replace(/\.[^.]+$/, "").toLowerCase();
+              if (keywords.some(kw => nameNoExt.includes(kw))) {
+                return file;
+              }
+            }
+            return null;
+          }
+
+          revealBtn.addEventListener("click", async () => {
+            // Collapse if already expanded
+            if (!contentArea.classList.contains("hidden")) {
+              contentArea.classList.add("hidden");
+              previewEl.classList.remove("hidden");
+              revealBtn.textContent = isTruncated ? "Show full document" : "Show all chunks";
+              card.classList.remove("border-blue-500", "ring-2", "ring-blue-300");
+              openFileBtn.classList.add("hidden");
+              return;
+            }
+
+            previewEl.classList.add("hidden");
+            contentArea.classList.remove("hidden");
+            revealBtn.textContent = "Collapse";
+            card.classList.add("border-blue-500", "ring-2", "ring-blue-300");
+
+            // Try to find matching file for "Open file" button
+            const matchedFile = findMatchingFile(baseTitle);
+            if (matchedFile) {
+              openFileBtn.classList.remove("hidden");
+              openFileBtn.title = `Open ${matchedFile}`;
+            }
+
+            if (loaded) return;
+            contentArea.innerHTML = `<p class="text-gray-500 text-sm">Loading…</p>`;
+
+            try {
+              const res = await fetch(`${API}/search/chunks?docTitle=${encodeURIComponent(baseTitle)}`);
+              if (!res.ok) throw new Error("Failed to load chunks");
+              let chunks = await res.json();
+              if (chunks.length > 10) {
+                // Find the matched chunk index and show ±5 around it
+                const matchedIdx = chunks.findIndex(c => String(c.id) === String(doc.id));
+                const start = Math.max(0, matchedIdx - 5);
+                chunks = chunks.slice(start, start + 10);
+              }
+
+              contentArea.innerHTML = "";
+              chunks.forEach((chunk, i) => {
+                let meta = {};
+                try {
+                  meta = typeof chunk.metadata === "string" ? JSON.parse(chunk.metadata) : (chunk.metadata || {});
+                } catch (e) {
+                  console.warn("Failed to parse chunk metadata:", e);
+                }
+                const originalIdx = chunks.indexOf(chunk);
+                const chunkNum = meta.chunkNumber || originalIdx + 1;
+                const sectionInfo = [];
+                if (meta.sectionTitle) sectionInfo.push(meta.sectionTitle);
+                if (meta.pageNumber) sectionInfo.push(`p${meta.pageNumber}`);
+                const metaLabel = sectionInfo.length ? ` — ${escapeHtml(sectionInfo.join(", "))}` : "";
+                const isMatch = String(chunk.id) === String(doc.id);
+
+                contentArea.innerHTML += `
+                  ${i > 0 ? '<hr class="my-2 border-gray-300" />' : ""}
+                  <div class="mt-2 ${isMatch ? "bg-yellow-50 rounded p-2" : ""}">
+                    <span class="text-xs font-medium text-gray-500">Chunk ${chunkNum}${metaLabel}${isMatch ? " · matched" : ""}</span>
+                    <p class="text-gray-700 text-sm leading-relaxed mt-1 whitespace-pre-wrap">${escapeHtml(chunk.content)}</p>
+                  </div>
+                `;
+              });
+
+              if (!allChunks.length) {
+                contentArea.innerHTML = `<p class="text-gray-500 text-sm">No chunks found for this document.</p>`;
+              }
+              loaded = true;
+            } catch (err) {
+              contentArea.innerHTML = `<p class="text-red-500 text-sm mt-2">Error loading chunks: ${escapeHtml(err.message)}</p>`;
+            }
+          });
+
+          // "Open file" button handler
+          openFileBtn.addEventListener("click", async () => {
+            const matchedFile = await findMatchingFile(baseTitle);
+
+            if (matchedFile) {
+              const repoPath = window.location.pathname.substring(
+                0,
+                window.location.pathname.lastIndexOf("/")
+              );
+
+              window.open(
+                `file://${repoPath}/docs/${encodeURIComponent(matchedFile)}`,
+                "_blank"
+              );
+            }
+          });
+
+          resultsEl.appendChild(card);
+        }
+
+        // Update combine & answer bar
+        updateCombineAnswerBar();
+      } catch (err) {
+        show("searchError", err.message);
+        resultsEl.innerHTML = "";
+      }
+    }
+
+    /* ---- INSERT ---- */
+    async function doInsert() {
+      const title = document.getElementById("insertTitle").value.trim();
+      const content = document.getElementById("insertContent").value.trim();
+      hide("insertError");
+      hide("insertSuccess");
+
+      if (!title || !content) {
+        show("insertError", "Title and content are required.");
+        return;
+      }
+
+      // Format today's date as dd/mm/yyyy
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, "0");
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const yyyy = now.getFullYear();
+      const today = `${dd}/${mm}/${yyyy}`;
+
+      const finalContent = `${content}\n\n| document added ${today}`;
+
+      try {
+        const res = await fetch(`${API}/insert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, content: finalContent }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          show("insertError", err.error || "Insert failed");
+          return;
+        }
+        const data = await res.json();
+        show("insertSuccess", `Inserted successfully (id: ${data.id})`);
+        document.getElementById("insertTitle").value = "";
+        document.getElementById("insertContent").value = "";
+      } catch (err) {
+        show("insertError", err.message);
+      }
+    }
+
+    /* ---- escape HTML to prevent XSS in rendered content ---- */
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    /* ---- COMBINE & ANSWER BAR ---- */
+    function updateCombineAnswerBar() {
+      const checkboxes = document.querySelectorAll(".result-checkbox:checked");
+      const bar = document.getElementById("combineAnswerBar");
+      const countEl = document.getElementById("selectedCount");
+
+      if (checkboxes.length === 0) {
+        bar.classList.add("hidden");
+        return;
+      }
+
+      bar.classList.remove("hidden");
+      countEl.textContent = `${checkboxes.length} chunk(s) selected`;
+    }
+
+    // Listen for checkbox changes
+    document.getElementById("results").addEventListener("change", (e) => {
+      if (e.target.classList.contains("result-checkbox")) {
+        updateCombineAnswerBar();
+      }
+    });
+
+    async function doCombineAndAnswer() {
+      const checkboxes = document.querySelectorAll(".result-checkbox:checked");
+      if (checkboxes.length === 0) return;
+
+      const query = document.getElementById("searchInput").value.trim();
+      if (!query) return;
+
+      // Collect selected chunks with their full metadata
+      const selectedChunks = [];
+      for (const cb of checkboxes) {
+        // pg returns BIGSERIAL ids as strings, so compare as strings
+        const id = String(cb.dataset.id);
+        const doc = allResultsData.find(d => String(d.id) === id);
+        if (doc) {
+          let parsedMetadata = {};
+          if (doc.metadata) {
+            try {
+              parsedMetadata = typeof doc.metadata === "string" ? JSON.parse(doc.metadata) : doc.metadata;
+            } catch (e) {
+              console.warn("Failed to parse metadata:", e);
+              parsedMetadata = {};
+            }
+          }
+          selectedChunks.push({
+            id: doc.id,
+            title: doc.title,
+            content: doc.content,
+            metadata: parsedMetadata,
+          });
+        } else {
+          console.warn(`No document found for id=${id} in allResultsData`);
+        }
+      }
+
+      if (selectedChunks.length === 0) {
+        document.getElementById("answerContent").textContent =
+          "No chunks selected. Please check at least one result.";
+        document.getElementById("answerOutput").classList.remove("hidden");
+        return;
+      }
+
+      // Show loading state
+      const btn = document.getElementById("combineAnswerBtn");
+      btn.disabled = true;
+      btn.textContent = "Generating…";
+      hide("answerOutput");
+
+      try {
+        const res = await fetch(`${API}/combine-and-answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, chunks: selectedChunks }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          throw new Error(err.error || `Server returned ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        // Show answer
+        document.getElementById("answerOutput").className =
+          "mt-4 bg-green-50 border border-green-200 rounded-lg p-4";
+        const source = data.contextChunks
+          ? `\n\n— answered from ${data.contextChunks} chunk(s) across ${data.documents.length} document(s): ${data.documents.join(", ")}`
+          : "";
+        document.getElementById("answerContent").textContent = data.answer + source;
+        document.getElementById("answerOutput").classList.remove("hidden");
+      } catch (err) {
+        document.getElementById("answerContent").textContent = `Error: ${err.message}`;
+        document.getElementById("answerOutput").classList.remove("hidden");
+        document.getElementById("answerOutput").className = "mt-4 bg-red-50 border border-red-200 rounded-lg p-4";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Combine & Answer";
+      }
+    }
+
+    /* ─── INSERT TOGGLE ─── */
+    let insertExpanded = false;
+    document.getElementById("insertToggleBtn").addEventListener("click", () => {
+      insertExpanded = !insertExpanded;
+      const form = document.getElementById("insertForm");
+      const icon = document.getElementById("insertToggleIcon");
+      if (insertExpanded) {
+        form.classList.remove("hidden");
+        icon.textContent = "−";
+      } else {
+        form.classList.add("hidden");
+        icon.textContent = "+";
+      }
+    });
+
+    /* ─── DRAG & DROP FILE UPLOAD ─── */
+    const dropZone = document.getElementById("dropZone");
+    const fileInput = document.getElementById("fileInput");
+    const uploadedFilesList = document.getElementById("uploadedFilesList");
+
+    // Click on drop zone opens file picker
+    dropZone.addEventListener("click", () => fileInput.click());
+
+    // Prevent default drag behaviors
+    ["dragenter", "dragover", "dragleave", "drop"].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => { e.preventDefault(); e.stopPropagation(); });
+    });
+
+    // Highlight on drag over
+    dropZone.addEventListener("dragenter", () => dropZone.classList.add("border-blue-500", "bg-blue-100"));
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("border-blue-500", "bg-blue-100"));
+    dropZone.addEventListener("drop", (e) => {
+      dropZone.classList.remove("border-blue-500", "bg-blue-100");
+      const files = e.dataTransfer.files;
+      handleFiles(files);
+    });
+
+    fileInput.addEventListener("change", () => {
+      handleFiles(fileInput.files);
+      fileInput.value = ""; // reset so same files can be re-selected
+    });
+
+    async function handleFiles(files) {
+      hide("uploadError");
+      hide("uploadSuccess");
+
+      if (!files || files.length === 0) return;
+
+      const validExtensions = [".pdf",".docx",".doc",".xlsx",".xlsm",".html",".htm",".txt",".md",".json",".csv",".xml",".pptx"];
+      const toUpload = [];
+      const invalid = [];
+
+      for (const file of files) {
+        const ext = "." + file.name.split(".").pop().toLowerCase();
+        if (validExtensions.includes(ext)) {
+          toUpload.push(file);
+        } else {
+          invalid.push(file.name);
+        }
+      }
+
+      if (invalid.length) {
+        show("uploadError", `Unsupported file(s): ${invalid.join(", ")}`);
+        return;
+      }
+
+      // Show files in list
+      uploadedFilesList.innerHTML = "";
+      for (const file of toUpload) {
+        const item = document.createElement("div");
+        item.className = "flex items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded px-3 py-2";
+        item.innerHTML = `
+          <svg class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <span class="truncate">${escapeHtml(file.name)}</span>
+          <span class="text-xs text-gray-400 ml-auto">${(file.size / 1024).toFixed(1)} KB</span>
+        `;
+        uploadedFilesList.appendChild(item);
+      }
+
+      // Upload each file
+      for (const file of toUpload) {
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+
+        try {
+          const res = await fetch(`${API}/upload-file`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: res.statusText }));
+            throw new Error(err.error || `Upload failed (${res.status})`);
+          }
+
+          const data = await res.json();
+          // Update item with status
+          const items = uploadedFilesList.querySelectorAll("div");
+          const idx = toUpload.indexOf(file);
+          if (items[idx]) {
+            items[idx].className = "flex items-center gap-2 text-sm bg-green-50 border border-green-200 rounded px-3 py-2";
+            items[idx].innerHTML += `
+              <svg class="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              <span class="text-xs text-green-600 ml-auto">${data.inserted || 0} chunk(s) embedded</span>
+            `;
+          }
+        } catch (err) {
+          const items = uploadedFilesList.querySelectorAll("div");
+          const idx = toUpload.indexOf(file);
+          if (items[idx]) {
+            items[idx].className = "flex items-center gap-2 text-sm bg-red-50 border border-red-200 rounded px-3 py-2";
+            items[idx].innerHTML += `
+              <svg class="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <span class="text-xs text-red-600 ml-auto truncate">${escapeHtml(err.message)}</span>
+            `;
+          }
+        }
+      }
+
+      show("uploadSuccess", `Processed ${toUpload.length} file(s)`);
+    }
+
+    // Restore last search on page load (back-button support)
+    window.addEventListener("load", restoreLastSearch);
+
+    document.getElementById("searchBtn").addEventListener("click", doSearch);
+    document.getElementById("searchInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doSearch();
+    });
+
+    // Sync slider ↔ number input
+    const slider = document.getElementById("maxDistanceSlider");
+    const numInput = document.getElementById("maxDistanceInput");
+    slider.addEventListener("input", () => {
+      numInput.value = slider.value;
+    });
+    numInput.addEventListener("input", () => {
+      let v = parseFloat(numInput.value);
+      if (isNaN(v)) return;
+      v = Math.min(1, Math.max(0, v));
+      slider.value = v;
+    });
+
+    document.getElementById("insertBtn").addEventListener("click", doInsert);
+
+    // Combine & Answer button
+    document.getElementById("combineAnswerBtn").addEventListener("click", doCombineAndAnswer);
+
+    /* ---- IMPORT FOLDER ---- */
+    async function doImport() {
+      hide("importError");
+      hide("importSuccess");
+
+      const btn = document.getElementById("importBtn");
+      btn.disabled = true;
+      btn.textContent = "Importing…";
+
+      try {
+        const res = await fetch(`${API}/import-folder`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder: "./docs" }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          show("importError", err.error || "Import failed");
+          btn.disabled = false;
+          btn.textContent = "Import";
+          return;
+        }
+        const data = await res.json();
+        let msg = `Imported: ${data.imported}, Skipped: ${data.skipped}`;
+        if (data.failed && data.failed.length > 0) {
+          msg += `, Failed: ${data.failed.map(f => f.file).join(", ")}`;
+        }
+        show("importSuccess", msg);
+      } catch (err) {
+        show("importError", err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Import";
+      }
+    }
+
+    document.getElementById("importBtn").addEventListener("click", doImport);
+  </script>
+</body>
+</html>
