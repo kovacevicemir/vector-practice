@@ -64,6 +64,13 @@ podman run -d \
   -v pgvector-data:/var/lib/postgresql/data \
   docker.io/docker.io/library/pgvector/pgvector:pg17
 
+
+When running existing: 
+podman run -d --name postgres -p 5434:5432 -v pgvector-data:/var/lib/postgresql -e POSTGRES_PASSWORD=postgres docker.io/pgvector/pgvector:pg18
+
+run this to install vector
+podman exec -it postgres psql -U postgres -d vectordb -c "SELECT extname, extversion FROM pg_extension;"
+
 # Docker equivalent:
 # docker run -d \
 #   --name postgres-vector \

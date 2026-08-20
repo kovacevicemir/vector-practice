@@ -29,8 +29,8 @@
         </button>
       </div>
 
-      <!-- max distance -->
-      <div class="flex items-center gap-3 mt-3">
+      <!-- max distance + combine & answer in same row -->
+      <div class="flex items-center gap-1 mt-6 flex-wrap">
         <label for="maxDistance" class="text-sm text-gray-700 whitespace-nowrap">Max distance</label>
         <input
           id="maxDistanceSlider"
@@ -50,6 +50,13 @@
           value="0.4"
           class="w-16 rounded-lg border border-gray-300 px-2 py-1 text-center text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+        <button
+          id="combineAnswerBtn"
+          class="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-4 py-1.5 rounded-lg transition ml-auto"
+        >
+          Combine &amp; Answer
+        </button>
+        <span id="selectedCount" class="text-sm text-gray-600"></span>
       </div>
 
       <!-- error -->
@@ -57,17 +64,6 @@
 
       <!-- results -->
       <div id="results" class="mt-4 space-y-4"></div>
-
-      <!-- combine & answer button -->
-      <div id="combineAnswerBar" class="hidden mt-4 flex items-center gap-3">
-        <button
-          id="combineAnswerBtn"
-          class="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-5 py-2 rounded-lg transition"
-        >
-          Combine &amp; Answer
-        </button>
-        <span id="selectedCount" class="text-sm text-gray-600"></span>
-      </div>
 
       <!-- answer output -->
       <div id="answerOutput" class="hidden mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
@@ -77,6 +73,30 @@
 
       <!-- hidden field to persist last search query for back-button support -->
       <input type="hidden" id="lastSearchQuery" value="" />
+    </div>
+
+    <!-- ─── DRAG & DROP FILE UPLOAD SECTION ─── -->
+    <div class="bg-white rounded-lg shadow p-6 mb-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4">Upload Files</h2>
+      <p class="text-sm text-gray-600 mb-4">Drag &amp; drop or click to select files. Supported: .pdf, .docx, .doc, .xlsx, .xlsm, .html, .htm, .txt, .md, .json, .csv, .xml, .pptx</p>
+      <div
+        id="dropZone"
+        class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition"
+      >
+        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <p class="mt-4 text-sm text-gray-600">
+          <span class="font-medium text-blue-600">Click to select</span> or drag and drop
+        </p>
+        <p class="text-xs text-gray-500 mt-1">Files will be copied to the docs folder and embedded automatically</p>
+      </div>
+      <input type="file" id="fileInput" multiple class="hidden"
+        accept=".pdf,.docx,.doc,.xlsx,.xlsm,.html,.htm,.txt,.md,.json,.csv,.xml,.pptx"
+      />
+      <div id="uploadedFilesList" class="mt-3 space-y-2"></div>
+      <p id="uploadError" class="mt-2 text-sm text-red-600 hidden"></p>
+      <p id="uploadSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
     </div>
 
     <!-- ─── INSERT SECTION (collapsible) ─── -->
@@ -114,42 +134,55 @@
       </div>
     </div>
 
-    <!-- ─── DRAG & DROP FILE UPLOAD SECTION ─── -->
-    <div class="bg-white rounded-lg shadow p-6 mb-8">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4">Upload Files</h2>
-      <p class="text-sm text-gray-600 mb-4">Drag &amp; drop one or more files here, or click to select. Supported: .pdf, .docx, .doc, .xlsx, .xlsm, .html, .htm, .txt, .md, .json, .csv, .xml, .pptx</p>
-      <div
-        id="dropZone"
-        class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition"
-      >
-        <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <p class="mt-4 text-sm text-gray-600">
-          <span class="font-medium text-blue-600">Click to select</span> or drag and drop
-        </p>
-        <p class="text-xs text-gray-500 mt-1">Files will be copied to the docs folder and embedded automatically</p>
+    <!-- ─── IMPORT FOLDER SECTION (compact, 1 row) ─── -->
+    <div class="bg-white rounded-lg shadow p-4 mb-8">
+      <div class="flex items-center gap-3 flex-wrap">
+        <h2 class="text-sm font-semibold text-gray-700 whitespace-nowrap">Import Folder</h2>
+        <p class="text-xs text-gray-500 truncate flex-1">Import supported files from the <code class="bg-gray-100 px-1 rounded">./docs</code> folder (.pdf, .docx, .txt, .md, .json, etc.)</p>
+        <button
+          id="importBtn"
+          class="bg-purple-600 hover:bg-purple-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+        >
+          Import
+        </button>
       </div>
-      <input type="file" id="fileInput" multiple class="hidden"
-        accept=".pdf,.docx,.doc,.xlsx,.xlsm,.html,.htm,.txt,.md,.json,.csv,.xml,.pptx"
-      />
-      <div id="uploadedFilesList" class="mt-3 space-y-2"></div>
-      <p id="uploadError" class="mt-2 text-sm text-red-600 hidden"></p>
-      <p id="uploadSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
-    </div>
-
-    <!-- ─── IMPORT FOLDER SECTION ─── -->
-    <div class="bg-white rounded-lg shadow p-6">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4">Import Folder</h2>
-      <p class="text-sm text-gray-600 mb-4">Import all supported files from the <code class="bg-gray-100 px-1 rounded">./docs</code> folder (supports .pdf, .docx, .doc, .xlsx, .xlsm, .html, .htm, .txt, .md, .json, .csv, .xml, .pptx)</p>
-      <button
-        id="importBtn"
-        class="bg-purple-600 hover:bg-purple-700 text-white font-medium px-5 py-2 rounded-lg transition"
-      >
-        Import
-      </button>
       <p id="importError" class="mt-2 text-sm text-red-600 hidden"></p>
       <p id="importSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
+    </div>
+
+    <!-- ─── DATABASE IMPORT/EXPORT ─── -->
+    <div class="bg-white rounded-lg shadow p-4 mb-8">
+      <div class="flex items-center gap-3 flex-wrap">
+        <h2 class="text-sm font-semibold text-gray-700 whitespace-nowrap">Database</h2>
+        <button
+          id="exportDbBtn"
+          class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+        >
+          Export Database
+        </button>
+        <input
+          type="file"
+          id="importDbFileInput"
+          class="hidden"
+          accept=".sql,.txt,.backup,.dump"
+        />
+        <button
+          id="selectDbFileBtn"
+          class="bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+        >
+          Select File
+        </button>
+        <button
+          id="importDbBtn"
+          class="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled
+        >
+          Import Database
+        </button>
+        <span id="importDbFileName" class="text-xs text-gray-500"></span>
+      </div>
+      <p id="dbError" class="mt-2 text-sm text-red-600 hidden"></p>
+      <p id="dbSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
     </div>
   </div>
 
@@ -257,7 +290,7 @@
               <input type="checkbox" checked data-id="${doc.id}" class="absolute top-0 right-0 w-5 h-5 accent-blue-600 result-checkbox" />
               <p class="text-sm text-gray-600 mb-1">ID: ${doc.id}${scoreLabel}</p>
               <p class="text-xs text-gray-500 mb-2 pr-8">${escapeHtml(doc.title || "")}</p>
-              <p class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap preview-text">${previewText}</p>
+              <p class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap break-words preview-text">${previewText}</p>
               <div class="full-content-area hidden mt-2"></div>
               <div class="flex items-center gap-3 mt-2">
                 <button type="button" class="reveal-btn text-sm text-blue-600 font-medium underline">
@@ -358,7 +391,7 @@
                   ${i > 0 ? '<hr class="my-2 border-gray-300" />' : ""}
                   <div class="mt-2 ${isMatch ? "bg-yellow-50 rounded p-2" : ""}">
                     <span class="text-xs font-medium text-gray-500">Chunk ${chunkNum}${metaLabel}${isMatch ? " · matched" : ""}</span>
-                    <p class="text-gray-700 text-sm leading-relaxed mt-1 whitespace-pre-wrap">${escapeHtml(chunk.content)}</p>
+                    <p class="text-gray-700 text-sm leading-relaxed mt-1 whitespace-pre-wrap break-words">${escapeHtml(chunk.content)}</p>
                   </div>
                 `;
               });
@@ -451,15 +484,13 @@
     /* ---- COMBINE & ANSWER BAR ---- */
     function updateCombineAnswerBar() {
       const checkboxes = document.querySelectorAll(".result-checkbox:checked");
-      const bar = document.getElementById("combineAnswerBar");
       const countEl = document.getElementById("selectedCount");
 
       if (checkboxes.length === 0) {
-        bar.classList.add("hidden");
+        countEl.textContent = "";
         return;
       }
 
-      bar.classList.remove("hidden");
       countEl.textContent = `${checkboxes.length} chunk(s) selected`;
     }
 
@@ -740,6 +771,70 @@
     }
 
     document.getElementById("importBtn").addEventListener("click", doImport);
+
+    /* ---- DATABASE EXPORT/IMPORT ---- */
+    document.getElementById("exportDbBtn").addEventListener("click", () => {
+      hide("dbError");
+      hide("dbSuccess");
+      window.open(`${API}/backup`, "_blank");
+    });
+
+    let selectedImportFile = null;
+
+    document.getElementById("selectDbFileBtn").addEventListener("click", () => {
+      document.getElementById("importDbFileInput").click();
+    });
+
+    document.getElementById("importDbFileInput").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        selectedImportFile = file;
+        document.getElementById("importDbFileName").textContent = file.name + " (" + (file.size / 1024 / 1024).toFixed(1) + " MB)";
+        document.getElementById("importDbBtn").disabled = false;
+      } else {
+        selectedImportFile = null;
+        document.getElementById("importDbFileName").textContent = "";
+        document.getElementById("importDbBtn").disabled = true;
+      }
+    });
+
+    document.getElementById("importDbBtn").addEventListener("click", async () => {
+      if (!selectedImportFile) {
+        show("dbError", "Please select a backup file first.");
+        return;
+      }
+      if (!confirm("This will replace the entire database with the backup. Continue?")) return;
+
+      hide("dbError");
+      hide("dbSuccess");
+      const btn = document.getElementById("importDbBtn");
+      btn.disabled = true;
+      btn.textContent = "Importing…";
+
+      try {
+        const formData = new FormData();
+        formData.append("backup", selectedImportFile);
+        // Very long timeout for multi-GB files
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000); // 30 min
+        const res = await fetch(`${API}/restore`, { method: "POST", body: formData, signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }));
+          show("dbError", err.error || "Import failed");
+        } else {
+          show("dbSuccess", "Database imported successfully. Refresh the page.");
+        }
+      } catch (err) {
+        if (err.name === "AbortError") {
+          show("dbError", "Upload timed out. For very large files, copy the file to ./database_backup and click Import Database.");
+        } else {
+          show("dbError", err.message);
+        }
+      } finally {
+        btn.textContent = "Import Database";
+      }
+    });
   </script>
 </body>
 </html>
