@@ -52,7 +52,7 @@
         />
         <button
           id="combineAnswerBtn"
-          class="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-4 py-1.5 rounded-lg transition ml-auto"
+          class="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-4 py-1.5 rounded-lg transition ml-auto"
         >
           Combine &amp; Answer
         </button>
@@ -62,14 +62,14 @@
       <!-- error -->
       <p id="searchError" class="mt-2 text-sm text-red-600 hidden"></p>
 
-      <!-- results -->
-      <div id="results" class="mt-4 space-y-4"></div>
-
       <!-- answer output -->
       <div id="answerOutput" class="hidden mt-4 bg-green-50 border border-green-200 rounded-lg p-4">
         <h3 class="font-semibold text-green-800 mb-2">Answer</h3>
         <div id="answerContent" class="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap"></div>
       </div>
+
+      <!-- results -->
+      <div id="results" class="mt-4 space-y-4"></div>
 
       <!-- hidden field to persist last search query for back-button support -->
       <input type="hidden" id="lastSearchQuery" value="" />
@@ -105,7 +105,7 @@
         id="insertToggleBtn"
         class="w-full flex items-center justify-between px-6 py-4 text-gray-800 hover:bg-gray-50 transition rounded-lg"
       >
-        <h2 class="text-xl font-semibold">Insert Document</h2>
+        <h2 class="text-sm font-semibold text-gray-700">Insert Document</h2>
         <span id="insertToggleIcon" class="text-2xl font-light text-gray-500 w-8 h-8 flex items-center justify-center">+</span>
       </button>
       <div id="insertForm" class="hidden px-6 pb-6">
@@ -150,39 +150,50 @@
       <p id="importSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
     </div>
 
-    <!-- ─── DATABASE IMPORT/EXPORT ─── -->
-    <div class="bg-white rounded-lg shadow p-4 mb-8">
-      <div class="flex items-center gap-3 flex-wrap">
-        <h2 class="text-sm font-semibold text-gray-700 whitespace-nowrap">Database</h2>
-        <button
-          id="exportDbBtn"
-          class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
-        >
-          Export Database
-        </button>
-        <input
-          type="file"
-          id="importDbFileInput"
-          class="hidden"
-          accept=".sql,.txt,.backup,.dump"
-        />
-        <button
-          id="selectDbFileBtn"
-          class="bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
-        >
-          Select File
-        </button>
-        <button
-          id="importDbBtn"
-          class="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-          disabled
-        >
-          Import Database
-        </button>
-        <span id="importDbFileName" class="text-xs text-gray-500"></span>
+    <!-- ─── DATABASE IMPORT/EXPORT (collapsible) ─── -->
+    <div class="bg-white rounded-lg shadow mb-8">
+      <button
+        id="dbToggleBtn"
+        class="w-full flex items-center justify-between px-6 py-4 text-gray-800 hover:bg-gray-50 transition rounded-lg"
+      >
+        <div class="flex items-center gap-3">
+          <h2 class="text-sm font-semibold text-gray-700 whitespace-nowrap">Database</h2>
+          <p class="text-xs text-gray-500">Export or import the database</p>
+        </div>
+        <span id="dbToggleIcon" class="text-2xl font-light text-gray-500 w-8 h-8 flex items-center justify-center">+</span>
+      </button>
+      <div id="dbForm" class="hidden px-6 pb-6">
+        <div class="flex items-center gap-3 flex-wrap">
+          <button
+            id="exportDbBtn"
+            class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+          >
+            Export Database
+          </button>
+          <input
+            type="file"
+            id="importDbFileInput"
+            class="hidden"
+            accept=".sql,.txt,.backup,.dump"
+          />
+          <button
+            id="selectDbFileBtn"
+            class="bg-orange-500 hover:bg-orange-600 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap"
+          >
+            Select File
+          </button>
+          <button
+            id="importDbBtn"
+            class="bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-1.5 rounded-lg transition whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled
+          >
+            Import Database
+          </button>
+          <span id="importDbFileName" class="text-xs text-gray-500"></span>
+        </div>
+        <p id="dbError" class="mt-2 text-sm text-red-600 hidden"></p>
+        <p id="dbSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
       </div>
-      <p id="dbError" class="mt-2 text-sm text-red-600 hidden"></p>
-      <p id="dbSuccess" class="mt-2 text-sm text-green-600 hidden"></p>
     </div>
   </div>
 
@@ -458,7 +469,7 @@
         const res = await fetch(`${API}/insert`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, content: finalContent }),
+          body: JSON.stringify({ title, content: finalContent, chunked: true }),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -466,7 +477,11 @@
           return;
         }
         const data = await res.json();
-        show("insertSuccess", `Inserted successfully (id: ${data.id})`);
+        if (data.totalChunks) {
+          show("insertSuccess", `Inserted ${data.inserted}/${data.totalChunks} chunk(s) successfully`);
+        } else {
+          show("insertSuccess", `Inserted successfully (id: ${data.id})`);
+        }
         document.getElementById("insertTitle").value = "";
         document.getElementById("insertContent").value = "";
       } catch (err) {
@@ -587,6 +602,21 @@
       const form = document.getElementById("insertForm");
       const icon = document.getElementById("insertToggleIcon");
       if (insertExpanded) {
+        form.classList.remove("hidden");
+        icon.textContent = "−";
+      } else {
+        form.classList.add("hidden");
+        icon.textContent = "+";
+      }
+    });
+
+    /* ─── DATABASE TOGGLE ─── */
+    let dbExpanded = false;
+    document.getElementById("dbToggleBtn").addEventListener("click", () => {
+      dbExpanded = !dbExpanded;
+      const form = document.getElementById("dbForm");
+      const icon = document.getElementById("dbToggleIcon");
+      if (dbExpanded) {
         form.classList.remove("hidden");
         icon.textContent = "−";
       } else {

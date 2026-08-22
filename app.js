@@ -5,11 +5,16 @@ const path = require("path");
 const { Client } = require("pg");
 const cheerio = require("cheerio");
 
-// Configure multer for file uploads (memory storage)
+// Configure multer for file uploads — write directly to docs folder.
+const DOCS_FOLDER = () => process.env.DOCS_FOLDER || path.join(__dirname, "docs");
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, path.join(__dirname, "uploads")),
-    filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname),
+    destination: (req, file, cb) => {
+      const dir = DOCS_FOLDER();
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => cb(null, file.originalname),
   }),
 }); // no size limit
 
@@ -31,7 +36,11 @@ app.use((req, res, next) => {
 
 // Hard ceiling enforced by the embedding server's physical batch size (llama-server -ub).
 // Chunks are verified against the real tokenizer and split if they exceed this.
-const EMBED_MAX_TOKENS = Number(process.env.EMBED_MAX_TOKENS) || 480;
+// Match the llama-server -ub physical batch size exactly.
+// The token-count fallback is deliberately pessimistic (1.5 chars/token)
+// because math notation, symbols, and HTML entities tokenize much denser than English text.
+const EMBED_MAX_TOKENS = Number(process.env.EMBED_MAX_TOKENS) || 512;
+const EMBED_SAFETY_MARGIN = 16; // reserve headroom for prefix "title: … | text: " variability
 
 const CHUNK_MAX_TOKENS = Number(process.env.CHUNK_MAX_TOKENS) || 400;
 const CHUNK_OVERLAP_TOKENS = Math.round(CHUNK_MAX_TOKENS * 0.15);
@@ -314,9 +323,61 @@ function sectionFrom($, el, pageNumber) {
   };
 }
 
+// Plain-text formats that can be read directly without Apache Tika
+const PLAIN_TEXT_EXTS = new Set([".txt", ".md", ".json", ".csv", ".xml", ".html", ".htm"]);
+
+/**
+ * Read a plain text file directly, bypassing Apache Tika entirely.
+ * Much faster and avoids sending large files over HTTP to the Tika container.
+ */
+function readPlainTextFile(filePath) {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const ext = path.extname(filePath).toLowerCase();
+
+  // For HTML/HTM files, parse with cheerio to extract clean text
+  if (ext === ".html" || ext === ".htm") {
+    const $ = cheerio.load(content);
+    flattenHtml($);
+    return sanitizeText($("body").text());
+  }
+
+  return sanitizeText(content);
+}
+
+/**
+ * Run async tasks with a concurrency limit.
+ * Ensures we don't overwhelm the embedding server or DB connection pool.
+ */
+async function runWithConcurrency(tasks, concurrency) {
+  const results = [];
+  const executing = new Set();
+
+  for (const [index, task] of tasks.entries()) {
+    const promise = task().then((result) => {
+      executing.delete(promise);
+      return result;
+    });
+    executing.add(promise);
+    results[index] = promise;
+
+    if (executing.size >= concurrency) {
+      await Promise.race(executing);
+    }
+  }
+
+  return Promise.all(results);
+}
+
 async function extractTextFromFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const isImage = [".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"].includes(ext);
+
+  // Plain text formats: read directly, bypass Tika entirely
+  if (PLAIN_TEXT_EXTS.has(ext)) {
+    const text = readPlainTextFile(filePath);
+    console.log(`Direct read: ${path.basename(filePath)} (${(text.length / 1024 / 1024).toFixed(1)} MB)`);
+    return sectionsFromPlainText(text || "");
+  }
 
   // Image-only files benefit more from plain OCR than HTML flattening.
   if (isImage) {
@@ -436,8 +497,9 @@ async function countTokens(text) {
     const data = await response.json();
     return (data.tokens || []).length;
   } catch (err) {
-    // Fall back to a deliberately pessimistic estimate
-    return Math.ceil(text.length / 2);
+    // Fall back to a conservative estimate. Special characters (math, symbols)
+    // tokenize at ~1 char/token, so 1.5 chars/token is a safe middle ground.
+    return Math.ceil(text.length / 1.5);
   }
 }
 
@@ -446,8 +508,10 @@ async function countTokens(text) {
  * Returns [{ text, tokens }].
  */
 async function splitToTokenLimit(text, limit) {
+  // Use a tighter limit to leave room for the "title: … | text: " prefix
+  const effectiveLimit = limit - EMBED_SAFETY_MARGIN;
   const tokens = await countTokens(text);
-  if (tokens <= limit) return [{ text, tokens }];
+  if (tokens <= effectiveLimit) return [{ text, tokens }];
 
   let cut = text.lastIndexOf(" ", Math.floor(text.length / 2));
   if (cut <= 0) cut = Math.floor(text.length / 2);
@@ -463,24 +527,27 @@ async function splitToTokenLimit(text, limit) {
   return [...leftParts, ...rightParts];
 }
 
-async function embedAndInsertChunks(docName, rawSections) {
-  let inserted = 0;
-  let skipped = 0;
-
+async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, batchSize = 8, logInterval = 50 } = {}) {
   const rawChunks = buildDocumentChunks(docName, rawSections);
 
-  // Reserve headroom for the "title: … | text: " prefix added at embed time
-  const textBudget = EMBED_MAX_TOKENS - (await countTokens(`title: ${docName} | text: `)) - 24;
+  // Reserve headroom for the "title: … | text: " prefix added at embed time.
+  // Section titles are truncated to MAX_TITLE_CHARS (150), so the worst-case title
+  // overhead is roughly: docName (~10) + 150 chars + " | chunkNNNN" (~15) ≈ 175 chars.
+  // At a conservative 1.5 chars/token, that's ~117 tokens for the full title.
+  const MAX_TITLE_TOKENS = 140; // generous upper bound including all markers
+  const textBudget = EMBED_MAX_TOKENS - (await countTokens(`title: ${docName} | text: `)) - MAX_TITLE_TOKENS - 24;
 
-  const chunks = [];
-  for (const chunk of rawChunks) {
-    for (const part of await splitToTokenLimit(chunk.text, textBudget)) {
-      chunks.push({
-        text: part.text,
-        metadata: { ...chunk.metadata, tokens: part.tokens },
-      });
-    }
-  }
+  // Process splitToTokenLimit concurrently for all raw chunks
+  const splitTasks = rawChunks.map((chunk) => async () => {
+    const parts = await splitToTokenLimit(chunk.text, textBudget);
+    return parts.map((part) => ({
+      text: part.text,
+      metadata: { ...chunk.metadata, tokens: part.tokens },
+    }));
+  });
+
+  const nestedChunks = await runWithConcurrency(splitTasks, concurrency);
+  const chunks = nestedChunks.flat();
 
   // Chunk numbers must be unique per document, not per section
   chunks.forEach((chunk, index) => {
@@ -488,50 +555,130 @@ async function embedAndInsertChunks(docName, rawSections) {
     chunk.metadata.totalChunks = chunks.length;
   });
 
-  for (const chunk of chunks) {
-    // Build a title that includes metadata for traceability
-    const parts = [docName];
-    if (chunk.metadata.sectionTitle) parts.push(chunk.metadata.sectionTitle);
-    if (chunk.metadata.pageNumber) parts.push(`p${chunk.metadata.pageNumber}`);
-    parts.push(`chunk${chunk.metadata.chunkNumber}`);
-    const title = parts.join(" | ");
-
-    // Check for duplicate
-    const existing = await db.query(
-      `SELECT id FROM documents WHERE title = $1`,
-      [title]
-    );
-    if (existing.rows.length > 0) {
-      console.log(`Skipping duplicate chunk: ${title}`);
-      skipped++;
-      continue;
-    }
-
-    chunk.metadata.insertedDate = new Date().toISOString();
-
-    console.log(
-      `Embedding [${chunk.metadata.chunkNumber}/${chunk.metadata.totalChunks}]: ${title} (${chunk.metadata.tokens} tokens)`
-    );
-
-    try {
-      const embedding = await embedDocument(title, chunk.text);
-      await db.query(
-        `INSERT INTO documents (title, content, metadata, embedding)
-         VALUES ($1, $2, $3, $4)`,
-        [title, chunk.text, JSON.stringify(chunk.metadata), JSON.stringify(embedding)]
-      );
-      inserted++;
-    } catch (err) {
-      console.error(`Failed to embed chunk: ${title}`, err.message);
-    }
+  if (chunks.length === 0) {
+    return { inserted: 0, skipped: 0, totalChunks: 0 };
   }
 
-  return { inserted, skipped, totalChunks: chunks.length };
-}
+  // Build titles for all chunks upfront
+  // Truncate section titles to 150 chars so the full title fits the embedding prefix budget
+  const MAX_TITLE_CHARS = 150;
+  const chunkTitles = chunks.map((chunk) => {
+    const parts = [docName];
+    if (chunk.metadata.sectionTitle) {
+      const st = String(chunk.metadata.sectionTitle);
+      parts.push(st.length > MAX_TITLE_CHARS ? st.slice(0, MAX_TITLE_CHARS) + "…" : st);
+    }
+    if (chunk.metadata.pageNumber) parts.push(`p${chunk.metadata.pageNumber}`);
+    parts.push(`chunk${chunk.metadata.chunkNumber}`);
+    return parts.join(" | ");
+  });
 
-// Helper to generate page-based titles: baseName_1, baseName_2, ...
-function getPageTitles(baseName, numPages) {
-  return Array.from({ length: numPages }, (_, i) => `${baseName}_${i + 1}`);
+  // Batch duplicate check: query all existing titles for this document in one go
+  const existingResult = await db.query(
+    `SELECT title FROM documents WHERE title = $1 OR title LIKE $1 || ' | %'`,
+    [docName]
+  );
+  const existingTitles = new Set(existingResult.rows.map((r) => r.title));
+
+  // Filter out duplicates and build the work queue
+  const workItems = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const title = chunkTitles[i];
+    if (existingTitles.has(title)) {
+      console.log(`Skipping duplicate chunk: ${title}`);
+      continue;
+    }
+    workItems.push({ chunk: chunks[i], title });
+  }
+
+  const totalWork = workItems.length;
+  const totalSkipped = chunks.length - totalWork;
+
+  if (totalWork === 0) {
+    console.log(`All ${chunks.length} chunk(s) already exist, skipping`);
+    return { inserted: 0, skipped: totalSkipped, totalChunks: chunks.length };
+  }
+
+  console.log(`Processing ${totalWork}/${chunks.length} chunk(s) with batch embedding...`);
+
+  // Batch items into groups for parallel embedding + insertion
+  let inserted = 0;
+  let failed = 0;
+  let completed = 0;
+
+  // Build batches
+  const batches = [];
+  for (let i = 0; i < workItems.length; i += batchSize) {
+    batches.push(workItems.slice(i, i + batchSize));
+  }
+
+  // Process batches with concurrency limit (multiple batches at once)
+  const batchTasks = batches.map((batch, batchIdx) => async () => {
+    // Prepare all embed texts for this batch
+    const embedTexts = batch.map((item) =>
+      `title: ${item.title} | text: ${item.chunk.text}`
+    );
+
+    // Assign insertion date
+    for (const item of batch) {
+      item.chunk.metadata.insertedDate = new Date().toISOString();
+    }
+
+    try {
+      const embeddings = await embedBatch(embedTexts);
+
+      // Insert all chunks in this batch concurrently
+      const insertTasks = batch.map((item, i) => async () => {
+        try {
+          await db.query(
+            `INSERT INTO documents (title, content, metadata, embedding)
+             VALUES ($1, $2, $3, $4)`,
+            [item.title, item.chunk.text, JSON.stringify(item.chunk.metadata), JSON.stringify(embeddings[i])]
+          );
+          inserted++;
+        } catch (err) {
+          console.error(`Failed to insert chunk: ${item.title}`, err.message);
+          failed++;
+        }
+
+        completed++;
+      });
+
+      await runWithConcurrency(insertTasks, concurrency);
+    } catch (err) {
+      console.error(`Batch ${batchIdx + 1}/${batches.length} failed:`, err.message);
+      // Fall back to individual embedding for this batch
+      for (const item of batch) {
+        try {
+          const embedding = await embedDocumentSafe(item.title, item.chunk.text);
+          await db.query(
+            `INSERT INTO documents (title, content, metadata, embedding)
+             VALUES ($1, $2, $3, $4)`,
+            [item.title, item.chunk.text, JSON.stringify(item.chunk.metadata), JSON.stringify(embedding)]
+          );
+          inserted++;
+        } catch (err2) {
+          console.error(`Failed to embed/insert chunk: ${item.title}`, err2.message);
+          failed++;
+        }
+        completed++;
+      }
+    }
+
+    // Log progress after each batch
+    const pct = ((completed / totalWork) * 100).toFixed(1);
+    console.log(
+      `  Batch ${batchIdx + 1}/${batches.length}: ${completed}/${totalWork} (${pct}%) — ${inserted} inserted, ${failed} failed`
+    );
+  });
+
+  await runWithConcurrency(batchTasks, Math.max(1, Math.min(concurrency, batches.length)));
+
+  console.log(
+    `Finished ${docName}: ${inserted} inserted, ${totalSkipped} skipped, ${failed} failed (${totalWork} attempted)`
+  );
+
+  return { inserted, skipped: totalSkipped, totalChunks: chunks.length };
 }
 
 // llama.cpp embedding server
@@ -554,12 +701,16 @@ let db = new Client({
   user: "postgres",
   password: "postgres",
 });
+db.on("error", (err) => console.error("DB connection error:", err.message));
 
 
 // --------------------------------------------------
 // TEXT → VECTOR
 // --------------------------------------------------
 
+/**
+ * Embed a single text string via the embedding server.
+ */
 async function embed(text) {
   const response = await fetch(`${EMBEDDING_URL}/v1/embeddings`, {
     method: "POST",
@@ -580,6 +731,49 @@ async function embed(text) {
   return data.data[0].embedding;
 }
 
+/**
+ * Embed multiple texts in a single batch request.
+ * The OpenAI-compatible /v1/embeddings endpoint accepts arrays of strings.
+ * Falls back to individual requests if the server doesn't support batching.
+ */
+async function embedBatch(texts) {
+  if (texts.length === 0) return [];
+  if (texts.length === 1) return [await embed(texts[0])];
+
+  try {
+    const response = await fetch(`${EMBEDDING_URL}/v1/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        input: texts,
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const data = await response.json();
+
+    // The response may be out of order or have index field
+    if (Array.isArray(data.data)) {
+      const sorted = [...data.data].sort((a, b) => a.index - b.index);
+      return sorted.map((item) => item.embedding);
+    }
+
+    throw new Error("Unexpected response format");
+  } catch (err) {
+    // Batch embedding not supported — fall back to individual requests.
+    // The texts are already prefixed with "title: … | text: ", so use embedRawSafe
+    // which handles "too large" errors by splitting the raw text.
+    console.warn(`Batch embedding failed, falling back to individual requests (${err.message.slice(0, 80)})`);
+    return Promise.all(texts.map((t) => embedRawSafe(t)));
+  }
+}
+
 // EmbeddingGemma is prefix-trained: documents and queries must use different
 // prompt prefixes or retrieval quality collapses.
 function embedDocument(title, text) {
@@ -590,6 +784,79 @@ function embedQuery(query) {
   return embed(`task: search result | query: ${query}`);
 }
 
+/**
+ * Safe version of embedDocument that handles "too large" errors.
+ * If the embedding server rejects the input as too large, the text
+ * is split in half at a word boundary and each half is embedded separately.
+ * Returns a single combined embedding (average of the two halves).
+ */
+async function embedDocumentSafe(title, text) {
+  const prefixed = `title: ${title || "none"} | text: ${text}`;
+
+  try {
+    return await embed(prefixed);
+  } catch (err) {
+    const msg = String(err.message || "");
+    // Check if the error is about input being too large
+    if (msg.includes("too large") || msg.includes("too many tokens") || msg.includes("maximum context length")) {
+      console.warn(`  Splitting oversized chunk: ${title} (${err.message.slice(0, 80)})`);
+
+      // Split text in half at word boundary
+      const mid = Math.floor(text.length / 2);
+      let cut = text.lastIndexOf(" ", mid);
+      if (cut <= 0) cut = text.indexOf(" ", mid);
+      if (cut <= 0 || cut >= text.length - 1) cut = mid;
+
+      const left = text.slice(0, cut).trim();
+      const right = text.slice(cut).trim();
+
+      if (!left || !right) {
+        // Can't split further, just rethrow
+        throw err;
+      }
+
+      // Embed both halves and average the vectors
+      const [leftEmbed, rightEmbed] = await Promise.all([
+        embedDocumentSafe(title, left),
+        embedDocumentSafe(title, right),
+      ]);
+
+      // Average the embeddings
+      return leftEmbed.map((v, i) => (v + rightEmbed[i]) / 2);
+    }
+
+    // Not a size error, rethrow
+    throw err;
+  }
+}
+
+/**
+ * Raw safe embed — same as embedDocumentSafe but for already-prefixed text.
+ * Used by embedBatch fallback where "title: … | text: " is already baked in.
+ */
+async function embedRawSafe(prefixedText) {
+  try {
+    return await embed(prefixedText);
+  } catch (err) {
+    const msg = String(err.message || "");
+    if (msg.includes("too large") || msg.includes("too many tokens") || msg.includes("maximum context length")) {
+      console.warn(`  Splitting oversized prefixed text (${err.message.slice(0, 60)})`);
+      const mid = Math.floor(prefixedText.length / 2);
+      let cut = prefixedText.lastIndexOf(" ", mid);
+      if (cut <= 0) cut = prefixedText.indexOf(" ", mid);
+      if (cut <= 0 || cut >= prefixedText.length - 1) cut = mid;
+      const left = prefixedText.slice(0, cut).trim();
+      const right = prefixedText.slice(cut).trim();
+      if (!left || !right) throw err;
+      const [leftEmbed, rightEmbed] = await Promise.all([
+        embedRawSafe(left),
+        embedRawSafe(right),
+      ]);
+      return leftEmbed.map((v, i) => (v + rightEmbed[i]) / 2);
+    }
+    throw err;
+  }
+}
 
 // --------------------------------------------------
 // RERANK
@@ -685,8 +952,11 @@ app.post("/insert", async (req, res) => {
   try {
     const { title, content, chunked } = req.body;
 
-    if (chunked) {
-      // Chunked insert: splits content into ~700 token chunks with overlap
+    // Auto-detect: if content is large enough to need chunking or chunked is explicitly set
+    const needsChunking = chunked || estimateTokens(content || "") > EMBED_MAX_TOKENS - EMBED_SAFETY_MARGIN;
+
+    if (needsChunking) {
+      // Chunked insert: splits content into overlapping chunks with metadata
       const sections = [{ text: content, pageNumber: null, sectionTitle: null }];
       const result = await embedAndInsertChunks(title || "untitled", sections);
       return res.json({
@@ -697,7 +967,7 @@ app.post("/insert", async (req, res) => {
       });
     }
 
-    // Legacy single-document insert
+    // Small content: single-document insert (no chunking needed)
     const embedding = await embedDocument(title, content);
 
     const result = await db.query(
@@ -743,8 +1013,10 @@ app.get("/search", async (req, res) => {
       });
     }
 
-    // Step 1: Embed the query
-    const embedding = await embedQuery(question);
+    // Step 1: Sanitize the query for embedding (strip question words, stop words, punctuation)
+    // The full original query is still used for the response and combine-and-answer
+    const searchQuery = sanitizeSearchQuery(question);
+    const embedding = await embedQuery(searchQuery);
 
     // Step 2: Retrieve up to 40 candidates from vector store
     const candidatesLimit = Math.min(maxResults, 40);
@@ -835,7 +1107,7 @@ app.get("/search/chunks", async (req, res) => {
 
 app.get("/docs-files", (req, res) => {
   try {
-    const folder = process.env.DOCS_FOLDER || "./docs";
+    const folder = DOCS_FOLDER();
     const files = fs.readdirSync(folder).filter(f => !f.startsWith("."));
     res.json(files);
   } catch (err) {
@@ -869,35 +1141,6 @@ async function main() {
   app.listen(3000, () => {
     console.log("Server running on http://localhost:3000");
   });
-}
-
-async function importJson() {
-  const fs = require("fs");
-
-  const documents = JSON.parse(
-    fs.readFileSync("./data.json", "utf8")
-  );
-
-  for (const document of documents) {
-
-    console.log(`Embedding ${document.id}: ${document.title}`);
-
-    const embedding = await embedDocument(document.title, document.body);
-
-    await db.query(
-      `
-      INSERT INTO documents (title, content, embedding)
-      VALUES ($1, $2, $3)
-      `,
-      [
-        document.title,
-        document.body,
-        JSON.stringify(embedding),
-      ]
-    );
-  }
-
-  console.log(`Imported ${documents.length} documents`);
 }
 
 app.post("/import-folder", async (req, res) => {
@@ -953,30 +1196,17 @@ app.post("/import-folder", async (req, res) => {
 
 app.post("/upload-file", upload.single("file"), async (req, res) => {
   try {
-    const folder = process.env.DOCS_FOLDER || path.join(__dirname, "docs");
-
-    // Multer v2 uses req.file (singular); v1 used req.files
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
     const file = req.file;
-    const destPath = path.join(folder, file.originalname);
-
-    // Ensure destination directory exists
-    fs.mkdirSync(folder, { recursive: true });
-
-    // Read buffer from the uploaded file (multer stores in memory for small uploads)
-    const buffer = file.buffer || fs.readFileSync(file.path);
-
-    // Write to docs folder
-    fs.writeFileSync(destPath, buffer);
-
-    console.log(`Uploaded file: ${file.originalname} -> ${destPath}`);
+    // Multer already wrote the file directly to ./docs/ with the original filename
+    console.log(`Uploaded file: ${file.originalname} -> ${file.path}`);
 
     // Embed only this newly added file
     const baseName = file.originalname.replace(/\.[^.]+$/, "");
-    const rawSections = await extractTextFromFile(destPath);
+    const rawSections = await extractTextFromFile(file.path);
 
     if (rawSections.length === 0) {
       console.log(`  ${file.originalname}: no text extracted, skipping embedding`);
@@ -1033,8 +1263,41 @@ async function countAnswerTokens(text) {
     const data = await response.json();
     return (data.tokens || []).length;
   } catch (err) {
-    return Math.ceil(text.length / 2);
+    // Conservative: special characters tokenize at ~1 char/token
+    return Math.ceil(text.length / 1.5);
   }
+}
+
+/**
+ * Strip question words, common stop words, and punctuation from a search query
+ * so the embedding model matches factual content rather than question syntax.
+ * The full original query is preserved for combine-and-answer.
+ */
+function sanitizeSearchQuery(query) {
+  if (!query) return "";
+  // Remove punctuation (keep hyphens inside words, keep apostrophes)
+  let cleaned = query.replace(/[?.,!;:()"'“”‘’]+/g, " ");
+  // Lowercase for stop-word matching
+  const words = cleaned.toLowerCase().split(/\s+/).filter(Boolean);
+  const stopWords = new Set([
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "need", "dare", "ought",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her",
+    "us", "them", "my", "your", "his", "its", "our", "their",
+    "this", "that", "these", "those",
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how",
+    "and", "but", "or", "nor", "not", "so", "yet", "if", "because",
+    "as", "until", "while", "of", "at", "by", "for", "with", "about",
+    "against", "between", "into", "through", "during", "before", "after",
+    "above", "below", "to", "from", "up", "down", "in", "out", "on", "off",
+    "over", "under", "again", "further", "then", "once", "here", "there",
+    "all", "each", "every", "both", "few", "more", "most", "other", "some",
+    "such", "no", "nor", "only", "own", "same", "too", "very", "just",
+    "please", "tell", "find", "show", "give", "list", "let", "know",
+  ]);
+  const kept = words.filter(w => w.length > 1 && !stopWords.has(w));
+  return kept.length > 0 ? kept.join(" ") : query;
 }
 
 /**
@@ -1355,9 +1618,96 @@ app.post("/combine-and-answer", async (req, res) => {
     const answer = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || raw.trim();
 
     if (!answer) {
-      console.error("Empty model response:", JSON.stringify(data).slice(0, 500));
+      const finishReason = choice?.finish_reason || "unknown";
+      console.error(`Model returned no answer (finish_reason: ${finishReason}):`, JSON.stringify(data).slice(0, 500));
+
+            if (finishReason === "content_filter") {
+        // DeepSeek has a built-in content filter. Retry with strategies:
+        // 1) system prompt to steer response + near-zero temperature
+        // 2) minimal prompt with context stripped
+        const retryStrategies = [
+          // Strategy 1: system prompt + very low temperature
+          async () => {
+            const res = await fetch(`${ANSWER_URL}/v1/chat/completions`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "qwen",
+                messages: [
+                  { role: "system", content: "You are a helpful assistant. Provide a concise factual answer based on the given context. Respond directly." },
+                  { role: "user", content: mdContent },
+                ],
+                max_tokens: ANSWER_MAX_TOKENS,
+                temperature: 0.01,
+                repeat_penalty: 1.0,
+                reasoning_format: "none",
+                chat_template_kwargs: { enable_thinking: false },
+              }),
+              signal: AbortSignal.timeout(300000),
+            });
+            return res;
+          },
+          // Strategy 2: strip context, keep only the query
+          async () => {
+            const minimalPrompt = `Answer this question: ${query}
+
+(Relevant context was provided but omitted due to content policy. Answer concisely based on what you know.)`;
+            const res = await fetch(`${ANSWER_URL}/v1/chat/completions`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "qwen",
+                messages: [
+                  { role: "system", content: "You are a helpful assistant. Answer concisely." },
+                  { role: "user", content: minimalPrompt },
+                ],
+                max_tokens: ANSWER_MAX_TOKENS,
+                temperature: 0.01,
+                reasoning_format: "none",
+                chat_template_kwargs: { enable_thinking: false },
+              }),
+              signal: AbortSignal.timeout(300000),
+            });
+            return res;
+          },
+        ];
+
+        for (const strategy of retryStrategies) {
+          try {
+            const retryRes = await strategy();
+            if (retryRes.ok) {
+              const retryData = await retryRes.json();
+              const retryChoice = retryData.choices?.[0];
+              const retryRaw =
+                retryChoice?.message?.content ||
+                retryChoice?.message?.reasoning_content ||
+                retryData.message?.content ||
+                retryData.text ||
+                "";
+              const retryAnswer = retryRaw.replace(/ thinking[\s\S]*?<\/think>/g, "").trim() || retryRaw.trim();
+              if (retryAnswer) {
+                return res.json({
+                  answer: retryAnswer,
+                  documents: [...docs.keys()],
+                  contextChunks: included.length,
+                  totalChunks: candidates.length,
+                  promptTokens,
+                });
+              }
+            }
+          } catch (retryErr) {
+            console.error("Content filter retry strategy failed:", retryErr.message);
+          }
+        }
+
+        return res.status(502).json({
+          error: "Model blocked the response (content_filter). The context may contain flagged content. Try a different query or reduce context.",
+          finish_reason: "content_filter",
+        });
+      }
+
       return res.status(502).json({
-        error: `Model returned no answer (finish_reason: ${choice?.finish_reason || "unknown"})`,
+        error: `Model returned no answer (finish_reason: ${finishReason})`,
       });
     }
 

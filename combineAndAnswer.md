@@ -37,18 +37,16 @@ I couldn't find enough information in the provided documents to answer this.
 
 ## Response Format
 1. Start with the direct answer in 1 to 8 short sentences.
-2. Then include:
+2. Then include evidence (keep it brief — at most 1-2 file names with page numbers):
 
 Evidence:
-- <claim> [Document | Chunk]
-- <claim> [Document | Chunk]
+- <claim> [file name | page number]
 
-3. If partial answer, include:
+3. If partial answer (evidence is insufficient), include:
 
 Missing:
 - <information not present in evidence>
 
-4. If partial answer, include
 Direct answer from model:
 - <model can try to answer the question directly (1-200 words max)>
 
