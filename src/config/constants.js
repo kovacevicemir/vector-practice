@@ -32,10 +32,10 @@ const upload = multer({
 // Match the llama-server -ub physical batch size exactly.
 // The token-count fallback is deliberately pessimistic (1.5 chars/token)
 // because math notation, symbols, and HTML entities tokenize much denser than English text.
-const EMBED_MAX_TOKENS = Number(process.env.EMBED_MAX_TOKENS) || 512;
+const EMBED_MAX_TOKENS = Number(process.env.EMBED_MAX_TOKENS) || 2048;
 const EMBED_SAFETY_MARGIN = 16; // reserve headroom for prefix "title: … | text: " variability
 
-const CHUNK_MAX_TOKENS = Number(process.env.CHUNK_MAX_TOKENS) || 400;
+const CHUNK_MAX_TOKENS = Number(process.env.CHUNK_MAX_TOKENS) || 1700;
 const CHUNK_OVERLAP_TOKENS = Math.round(CHUNK_MAX_TOKENS * 0.15);
 const ESTIMATE_TOKENS_PER_CHAR = 4; // rough: 1 token ≈ 4 chars for English text
 const CHUNK_MAX_CHARS = CHUNK_MAX_TOKENS * ESTIMATE_TOKENS_PER_CHAR;

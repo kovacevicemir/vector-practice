@@ -57,6 +57,17 @@ async function countTokens(text) {
 async function splitToTokenLimit(text, limit) {
   // Use a tighter limit to leave room for the "title: … | text: " prefix
   const effectiveLimit = limit - EMBED_SAFETY_MARGIN;
+
+  // Fast path: use local tiktoken estimate to avoid HTTP round-trip.
+  // estimateTokens runs locally (no HTTP) and uses a proper BPE tokenizer.
+  // BUT: the embedding model uses a different tokenizer (Gemma/BGE vs cl100k_base)
+  // which can count 30-50% more tokens for the same text. So we add a safety buffer.
+  const TOKENIZER_SAFETY_BUFFER = 96;
+  const localEstimate = estimateTokens(text);
+  if (localEstimate + TOKENIZER_SAFETY_BUFFER <= effectiveLimit) {
+    return [{ text, tokens: localEstimate }];
+  }
+
   const tokens = await countTokens(text);
   if (tokens <= effectiveLimit) return [{ text, tokens }];
 
@@ -77,12 +88,14 @@ async function splitToTokenLimit(text, limit) {
 /**
  * Full pipeline: chunk → token-limit → embed → insert.
  */
-async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, batchSize = 8, logInterval = 50 } = {}) {
+async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, batchSize = 8, logInterval = 50, onProgress } = {}) {
   const rawChunks = buildDocumentChunks(docName, rawSections);
 
   // Reserve headroom for the "title: … | text: " prefix added at embed time.
   const { EMBEDDING_URL } = require("../config/constants");
-  const textBudget = EMBED_MAX_TOKENS - (await countTokens(`title: ${docName} | text: `)) - MAX_TITLE_TOKENS - 24;
+  // Use local estimate for the title prefix to avoid yet another HTTP call
+  const prefixTokens = estimateTokens(`title: ${docName} | text: `);
+  const textBudget = EMBED_MAX_TOKENS - prefixTokens - MAX_TITLE_TOKENS - 24;
 
   // Process splitToTokenLimit concurrently for all raw chunks
   const splitTasks = rawChunks.map((chunk) => async () => {
@@ -175,8 +188,10 @@ async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, bat
     try {
       const embeddings = await embedBatch(embedTexts);
 
-      // Insert all chunks in this batch concurrently
-      const insertTasks = batch.map((item, i) => async () => {
+      // Insert sequentially within each batch — batch-level concurrency
+      // already gives parallelism, and pg.Client doesn't support concurrent queries.
+      for (let i = 0; i < batch.length; i++) {
+        const item = batch[i];
         try {
           await db.query(
             `INSERT INTO documents (title, content, metadata, embedding)
@@ -188,11 +203,8 @@ async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, bat
           console.error(`Failed to insert chunk: ${item.title}`, err.message);
           failed++;
         }
-
         completed++;
-      });
-
-      await runWithConcurrency(insertTasks, concurrency);
+      }
     } catch (err) {
       console.error(`Batch ${batchIdx + 1}/${batches.length} failed:`, err.message);
       // Fall back to individual embedding for this batch
@@ -212,6 +224,9 @@ async function embedAndInsertChunks(docName, rawSections, { concurrency = 6, bat
         completed++;
       }
     }
+
+    // Report progress
+    if (onProgress) onProgress(completed, totalWork);
 
     // Log progress after each batch
     const pct = ((completed / totalWork) * 100).toFixed(1);

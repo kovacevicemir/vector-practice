@@ -5,6 +5,25 @@ const path = require("path");
 const { DOCS_FOLDER, upload } = require("../config/constants");
 const { extractTextFromFile } = require("../services/file-parser");
 const { embedAndInsertChunks } = require("../services/db-service");
+const { runWithConcurrency } = require("../utils/concurrency");
+
+// --------------------------------------------------
+// IMPORT PROGRESS TRACKER
+// --------------------------------------------------
+
+let importProgress = null;
+
+function resetProgress(files) {
+  importProgress = {
+    files,
+    currentFile: null,
+    currentFileIndex: 0,
+    totalFiles: files.length,
+    fileProgress: null,  // { current, total, percent }
+    done: false,
+    error: null,
+  };
+}
 
 const router = Router();
 
@@ -23,6 +42,14 @@ router.get("/docs-files", (req, res) => {
 });
 
 // --------------------------------------------------
+// IMPORT PROGRESS (polled by frontend)
+// --------------------------------------------------
+
+router.get("/import-progress", (req, res) => {
+  res.json(importProgress || { done: true, files: [], totalFiles: 0 });
+});
+
+// --------------------------------------------------
 // IMPORT FOLDER
 // --------------------------------------------------
 
@@ -36,26 +63,68 @@ router.post("/import-folder", async (req, res) => {
       .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
       .map((entry) => entry.name);
 
-    let imported = 0;
-    let skipped = 0;
-    let failed = [];
+    resetProgress(files);
 
-    for (const file of files) {
+    const results = [];
+
+    const fileTasks = files.map((file, fileIdx) => async () => {
       const filePath = path.join(folder, file);
 
       try {
+        if (importProgress) {
+          importProgress.currentFile = file;
+          importProgress.currentFileIndex = fileIdx;
+        }
+
         const baseName = file.replace(/\.[^.]+$/, ""); // remove extension
         const rawSections = await extractTextFromFile(filePath);
-        const result = await embedAndInsertChunks(baseName, rawSections);
-        imported += result.inserted;
-        skipped += result.skipped;
+
+        // Wrap embedAndInsertChunks to track per-file progress
+        const result = await embedAndInsertChunks(baseName, rawSections, {
+          onProgress: (current, total) => {
+            if (importProgress) {
+              importProgress.fileProgress = {
+                current,
+                total,
+                percent: total > 0 ? ((current / total) * 100).toFixed(1) : 0,
+              };
+            }
+          },
+        });
+
+        if (importProgress) {
+          importProgress.fileProgress = {
+            current: result.totalChunks,
+            total: result.totalChunks,
+            percent: 100,
+          };
+        }
+
         if (result.totalChunks > 0) {
           console.log(`  ${file}: ${result.totalChunks} chunks (${result.inserted} inserted, ${result.skipped} skipped)`);
         }
+        results.push({ inserted: result.inserted, skipped: result.skipped });
       } catch (err) {
         console.error(`Failed to import ${file}:`, err.message);
-        failed.push({ file, error: err.message });
+        results.push({ inserted: 0, skipped: 0, failed: true, file, error: err.message });
       }
+    });
+
+    // Process up to 3 files concurrently to avoid overwhelming the embedding server
+    await runWithConcurrency(fileTasks, 3);
+
+    let imported = 0;
+    let skipped = 0;
+    let failed = [];
+    for (const r of results) {
+      imported += r.inserted || 0;
+      skipped += r.skipped || 0;
+      if (r.failed) failed.push({ file: r.file, error: r.error });
+    }
+
+    if (importProgress) {
+      importProgress.done = true;
+      importProgress.fileProgress = null;
     }
 
     res.json({
