@@ -15,7 +15,7 @@ router.get("/search", async (req, res) => {
     const question = req.query.q;
     const maxResults = Number(req.query.limit) || 100;
     const rerankTopK = Number(req.query.rerankTopK) || 10;
-    const maxDistance = Number(req.query.maxDistance) || 0.40;
+    const maxDistance = Number(req.query.maxDistance) || 0.7;
 
     if (!question) {
       return res.status(400).json({
