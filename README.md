@@ -148,7 +148,7 @@ echo "Using model directory: $MODEL_DIR" && \
   --embedding \
   --ctx-size 8192 \
   -ub 2048 \
-  --pooling last \
+  --pooling mean \
   --host 127.0.0.1 \
   -b 2048 \
   --port 8081
@@ -161,7 +161,7 @@ echo "Using model directory: $MODEL_DIR" && \
 | Port         | `8081`                             |
 | Context      | 8192                               |
 | Batch size   | 2048                               |
-| Pooling      | `last`                             |
+| Pooling      | `mean`                             |
 
 #### 4b. Reranker Model — Ettin Reranker 150M v1
 

@@ -60,9 +60,10 @@ async function splitToTokenLimit(text, limit) {
 
   // Fast path: use local tiktoken estimate to avoid HTTP round-trip.
   // estimateTokens runs locally (no HTTP) and uses a proper BPE tokenizer.
-  // BUT: the embedding model uses a different tokenizer (Gemma/BGE vs cl100k_base)
-  // which can count 30-50% more tokens for the same text. So we add a safety buffer.
-  const TOKENIZER_SAFETY_BUFFER = 96;
+  // BUT: the embedding model uses a different tokenizer (Gemma vs cl100k_base)
+  // which can count 20-30% more tokens for the same text. So we add a safety buffer.
+  // Only skip HTTP when we're comfortably under the limit to avoid fallback overhead.
+  const TOKENIZER_SAFETY_BUFFER = 256;
   const localEstimate = estimateTokens(text);
   if (localEstimate + TOKENIZER_SAFETY_BUFFER <= effectiveLimit) {
     return [{ text, tokens: localEstimate }];
