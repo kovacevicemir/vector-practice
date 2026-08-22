@@ -68,6 +68,9 @@ podman run -d \
 When running existing: 
 podman run -d --name postgres -p 5434:5432 -v pgvector-data:/var/lib/postgresql -e POSTGRES_PASSWORD=postgres docker.io/pgvector/pgvector:pg18
 
+
+podman exec -it postgres createdb -U postgres vectordb
+
 run this to install vector
 podman exec -it postgres psql -U postgres -d vectordb -c "SELECT extname, extversion FROM pg_extension;"
 
@@ -144,6 +147,7 @@ echo "Using model directory: $MODEL_DIR" && \
   -ngl 999 \
   --embedding \
   --ctx-size 8192 \
+  -ub 2048 \
   --pooling last \
   --host 127.0.0.1 \
   -b 2048 \
