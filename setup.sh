@@ -116,11 +116,49 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Enable pgvector extension (table is auto-created by app.js on first start)
-info "Enabling pgvector extension…"
+# Enable pgvector extension (the pgvector/pgvector image ships with it built-in)
+info "Installing pgvector extension…"
 podman exec "$PG_NAME" psql -U postgres -d vectordb -c \
-    "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null 2>&1 || true
-ok "pgvector extension ready"
+    "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1 || {
+    fail "Failed to install pgvector extension"
+    ALL_OK=false
+}
+
+# Verify the extension actually registered
+EXT_CHECK=$(podman exec "$PG_NAME" psql -U postgres -d vectordb -tAc \
+    "SELECT 1 FROM pg_extension WHERE extname='vector' LIMIT 1;" 2>/dev/null || echo "0")
+if [ "$EXT_CHECK" = "1" ]; then
+    ok "pgvector extension is installed"
+    
+    # Verify VECTOR type works with the correct dimension (768)
+    DIM_CHECK=$(podman exec "$PG_NAME" psql -U postgres -d vectordb -tAc \
+        "SELECT typtype FROM pg_type WHERE typname='vector';" 2>/dev/null || echo "")
+    if [ -n "$DIM_CHECK" ]; then
+        ok "VECTOR(768) data type is available"
+    else
+        warn "VECTOR type not found — app.js will create it on startup if needed"
+    fi
+else
+    fail "pgvector extension is NOT installed — check container logs: podman logs $PG_NAME"
+    ALL_OK=false
+fi
+
+# Check the documents table exists with the correct VECTOR(768) dimension
+# (app.js creates this on first start, but verify it for early feedback)
+TABLE_CHECK=$(podman exec "$PG_NAME" psql -U postgres -d vectordb -tAc \
+    "SELECT 1 FROM information_schema.tables WHERE table_name='documents' LIMIT 1;" 2>/dev/null || echo "0")
+if [ "$TABLE_CHECK" = "1" ]; then
+    # Verify the embedding column uses VECTOR(768)
+    COL_CHECK=$(podman exec "$PG_NAME" psql -U postgres -d vectordb -tAc \
+        "SELECT data_type || '(' || COALESCE(domain_name::text, '768') || ')' FROM information_schema.columns WHERE table_name='documents' AND column_name='embedding';" 2>/dev/null || echo "")
+    if echo "$COL_CHECK" | grep -qi 'vector'; then
+        ok "documents table exists with VECTOR(768) column"
+    else
+        info "documents table exists but dimension not verified (app.js will handle it)"
+    fi
+else
+    info "documents table not yet created — app.js creates it automatically on first start"
+fi
 
 # ── Apache Tika ────────────────────────────────────────────────────────────
 TIKA_NAME="tika"

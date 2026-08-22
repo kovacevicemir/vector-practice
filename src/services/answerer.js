@@ -36,9 +36,9 @@ async function countAnswerTokens(text) {
 }
 
 /**
- * Render the prompt by combining query, chunks, and template.
+ * Render the prompt by combining query, additional context, chunks, and template.
  */
-function renderPrompt(query, includedRows, template) {
+function renderPrompt(query, includedRows, template, additionalContext) {
   const byDoc = new Map();
   for (const c of includedRows) {
     if (!byDoc.has(c.docTitle)) byDoc.set(c.docTitle, []);
@@ -51,8 +51,16 @@ function renderPrompt(query, includedRows, template) {
       .join("\n\n");
     return `---\n# ${docTitle}\n---\n\n${body}`;
   });
+
+  const additionalCtxSection = additionalContext && additionalContext.trim()
+    ? `## Additional Context
+
+${additionalContext.trim()}`
+    : "";
+
   return template
     .replace(/{{QUERY}}/g, () => query)
+    .replace(/{{ADDITIONAL_CONTEXT}}/g, () => additionalCtxSection)
     .replace(/{{CHUNKS}}/g, () => mdParts.join("\n\n"));
 }
 

@@ -19,6 +19,7 @@ router.post("/combine-and-answer", async (req, res) => {
     const {
       query,
       chunks,
+      additionalContext,
       includeRelated = true,
       relatedWindow = 2,
       relatedBefore,
@@ -157,7 +158,7 @@ router.post("/combine-and-answer", async (req, res) => {
       return res.status(500).json({ error: `Model context (${contextSize}) is too small to answer` });
     }
 
-    let mdContent = renderPrompt(query, included, template);
+    let mdContent = renderPrompt(query, included, template, additionalContext);
     let promptTokens = await countAnswerTokens(mdContent);
 
     while (promptTokens > promptBudget && included.length > 1) {
@@ -179,7 +180,7 @@ router.post("/combine-and-answer", async (req, res) => {
 
       if (dropIndex < 0) break;
       included = included.filter((_, i) => i !== dropIndex);
-      mdContent = renderPrompt(query, included, template);
+      mdContent = renderPrompt(query, included, template, additionalContext);
       promptTokens = await countAnswerTokens(mdContent);
     }
 
@@ -345,6 +346,7 @@ router.post("/combine-and-answer", async (req, res) => {
       documents: [...docs.keys()],
       contextChunks: included.length,
       totalChunks: candidates.length,
+      additionalContextUsed: !!(additionalContext && additionalContext.trim()),
       promptTokens,
     });
 

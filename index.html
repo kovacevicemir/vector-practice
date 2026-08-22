@@ -59,6 +59,25 @@
         <span id="selectedCount" class="text-sm text-gray-600"></span>
       </div>
 
+      <!-- ─── ADDITIONAL CONTEXT (collapsible) ─── -->
+      <div class="mt-3 border border-gray-200 rounded-lg overflow-hidden">
+        <button
+          id="contextToggleBtn"
+          class="w-full flex items-center justify-between px-4 py-2 text-gray-700 hover:bg-gray-50 transition text-sm"
+        >
+          <span class="font-medium">Additional Context</span>
+          <span id="contextToggleIcon" class="text-lg font-light text-gray-400">+</span>
+        </button>
+        <div id="contextForm" class="hidden px-4 pb-3 pt-1">
+          <textarea
+            id="additionalContext"
+            rows="3"
+            placeholder="Any extra context to include with the answer…"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          ></textarea>
+        </div>
+      </div>
+
       <!-- error -->
       <p id="searchError" class="mt-2 text-sm text-red-600 hidden"></p>
 
@@ -564,10 +583,12 @@
       hide("answerOutput");
 
       try {
+        const additionalContext = document.getElementById("additionalContext").value.trim();
+
         const res = await fetch(`${API}/combine-and-answer`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, chunks: selectedChunks }),
+          body: JSON.stringify({ query, chunks: selectedChunks, additionalContext }),
         });
 
         if (!res.ok) {
@@ -594,6 +615,21 @@
         btn.textContent = "Combine & Answer";
       }
     }
+
+    /* ─── ADDITIONAL CONTEXT TOGGLE ─── */
+    let contextExpanded = false;
+    document.getElementById("contextToggleBtn").addEventListener("click", () => {
+      contextExpanded = !contextExpanded;
+      const form = document.getElementById("contextForm");
+      const icon = document.getElementById("contextToggleIcon");
+      if (contextExpanded) {
+        form.classList.remove("hidden");
+        icon.textContent = "−";
+      } else {
+        form.classList.add("hidden");
+        icon.textContent = "+";
+      }
+    });
 
     /* ─── INSERT TOGGLE ─── */
     let insertExpanded = false;
