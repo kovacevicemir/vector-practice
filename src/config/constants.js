@@ -55,6 +55,7 @@ const TIKA_OCR_TIMEOUT_SECONDS = Number(process.env.TIKA_OCR_TIMEOUT_SECONDS) ||
 
 const EMBEDDING_URL = "http://127.0.0.1:8081";
 const RERANKER_URL = "http://127.0.0.1:8082";
+const RERANKER_BATCH_SIZE = Number(process.env.RERANKER_BATCH_SIZE) || 480; // physical batch (-ub) minus safety margin
 const ANSWER_URL = "http://127.0.0.1:8083";
 const ANSWER_MAX_TOKENS = 2048;
 
@@ -111,6 +112,7 @@ module.exports = {
   TIKA_OCR_TIMEOUT_SECONDS,
   EMBEDDING_URL,
   RERANKER_URL,
+  RERANKER_BATCH_SIZE,
   ANSWER_URL,
   ANSWER_MAX_TOKENS,
   PLAIN_TEXT_EXTS,

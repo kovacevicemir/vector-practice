@@ -169,7 +169,7 @@ router.post("/combine-and-answer", async (req, res) => {
       for (let i = 0; i < included.length; i++) {
         const c = included[i];
         const dropScore = c.isSelected
-          ? -1000 + c.priority + c.overlap
+          ? -1000 + c.priority - c.overlap
           : 1000 + c.priority - c.overlap;
 
         if (dropScore > bestDropScore) {

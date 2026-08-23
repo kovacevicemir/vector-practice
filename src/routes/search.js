@@ -7,8 +7,11 @@ const { rerank } = require("../services/reranker");
 const router = Router();
 
 // --------------------------------------------------
-// SEARCH
+// SEARCH — hybrid ranking: vector similarity + cross-encoder reranker
 // --------------------------------------------------
+
+const VECTOR_WEIGHT = 0.4;
+const RERANKER_WEIGHT = 0.6;
 
 router.get("/search", async (req, res) => {
   try {
@@ -51,16 +54,39 @@ router.get("/search", async (req, res) => {
       ]
     );
 
-    // Step 3: Rerank with cross-encoder model on localhost:8082
+    // Step 3: Rerank with cross-encoder model, then blend with vector scores
     let scored;
     if (result.rows.length > 0) {
-      const vectorScored = result.rows.map((row) => ({
-        ...row,
-        score: parseFloat(Math.max(0, Math.min(1, 1 - row.distance)).toFixed(3)),
-      }));
+      // Build vector-score map: id → normalized vector score (1 = best match)
+      const vectorScoreByDoc = new Map();
+      for (const row of result.rows) {
+        vectorScoreByDoc.set(row.id, 1 - Number(row.distance));
+      }
 
       const reranked = await rerank(question, result.rows, rerankTopK);
-      scored = reranked || vectorScored.slice(0, rerankTopK);
+
+      if (reranked) {
+        // Blend vector + reranker scores so strong vector matches aren't lost
+        scored = reranked.map((r) => ({
+          ...r,
+          score: parseFloat(
+            (
+              (vectorScoreByDoc.get(r.id) || 0) * VECTOR_WEIGHT +
+              r.score * RERANKER_WEIGHT
+            ).toFixed(3)
+          ),
+        })).sort((a, b) => b.score - a.score);
+      } else {
+        // Reranker unavailable — fall back to vector scores
+        scored = [...vectorScoreByDoc.entries()]
+          .map(([id, vs]) => {
+            const row = result.rows.find((r) => r.id === id);
+            return row ? { ...row, score: parseFloat(vs.toFixed(3)) } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, rerankTopK);
+      }
     } else {
       scored = [];
     }
